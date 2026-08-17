@@ -1,0 +1,14 @@
+# Licensed nuScenes data and generated experiment artifacts.
+v1.0-mini/
+samples/
+sweeps/
+maps/
+data/
+results/*/
+
+# Keep the two compact reference reports tracked.
+!results/icp_handeye_composed_4deg_20f.json
+!results/handeye_oracle_4deg_20f.json
+
+__pycache__/
+*.pyc
