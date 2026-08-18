@@ -74,6 +74,8 @@ def main():
     ap.add_argument("--frames", type=int, default=12)
     ap.add_argument("--noise-rpy-deg", type=float, nargs=3, default=[3.0, -3.0, 4.0])
     ap.add_argument("--noise-translation-m", type=float, nargs=3, default=[0.06, -0.04, 0.08])
+    ap.add_argument("--icp-seed", choices=("manual", "identity"), default="manual",
+                    help="manual uses T_B_L for ICP initialization; identity exposes ICP-only drift")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -100,7 +102,7 @@ def main():
     # initial guess; ICP itself only consumes raw point clouds.
     for i in range(len(scans) - 1):
         B = np.linalg.inv(body[i]) @ body[i + 1]
-        A_seed = np.linalg.inv(X_manual) @ B @ X_manual
+        A_seed = np.linalg.inv(X_manual) @ B @ X_manual if args.icp_seed == "manual" else np.eye(4)
         A, rmse = icp(scans[i + 1], scans[i], A_seed)
         step_motions.append(A)
         icp_rmse.append(rmse)
@@ -108,7 +110,7 @@ def main():
     # Compose locally registered steps into longer baselines. This increases
     # observability of yaw and translation while preserving raw-scan ICP as the
     # only LiDAR motion source.
-    pairs = []
+    pairs, pair_gaps = [], []
     for gap in (1, 3, 6):
         for i in range(len(scans) - gap):
             A = np.eye(4)
@@ -116,22 +118,38 @@ def main():
                 A = A @ step_motions[k]
             B = np.linalg.inv(body[i]) @ body[i + gap]
             pairs.append((A, B))
+            pair_gaps.append(gap)
 
-    def residual(delta):
-        X = se3(delta) @ X_manual
-        return np.concatenate([se3_vector(np.linalg.inv(B @ X) @ (X @ A)) for A, B in pairs])
+    def solve_handeye(selected_pairs):
+        def residual(delta):
+            X = se3(delta) @ X_manual
+            return np.concatenate([se3_vector(np.linalg.inv(B @ X) @ (X @ A)) for A, B in selected_pairs])
 
-    result = least_squares(
-        residual, np.zeros(6), loss="huber", f_scale=0.03,
-        bounds=(-np.array([0.20, 0.20, 0.20, 0.30, 0.30, 0.30]),
-                np.array([0.20, 0.20, 0.20, 0.30, 0.30, 0.30])), max_nfev=300,
-    )
+        result = least_squares(
+            residual, np.zeros(6), loss="huber", f_scale=0.03,
+            bounds=(-np.array([0.20, 0.20, 0.20, 0.30, 0.30, 0.30]),
+                    np.array([0.20, 0.20, 0.20, 0.30, 0.30, 0.30])), max_nfev=300,
+        )
+        return result, residual
+
+    result, residual = solve_handeye(pairs)
+    gap_estimates = {}
+    for gap in (1, 3, 6):
+        selected = [pair for pair, pair_gap in zip(pairs, pair_gaps) if pair_gap == gap]
+        if len(selected) >= 3:
+            gap_result, gap_residual = solve_handeye(selected)
+            gap_estimates[str(gap)] = {
+                "pairs": len(selected), "correction": gap_result.x.tolist(),
+                "rmse_se3": float(np.sqrt(np.mean(gap_residual(gap_result.x) ** 2))),
+            }
     expected = se3_vector(X_true @ np.linalg.inv(X_manual))
     report = {
         "mode": "raw nuScenes LiDAR ICP + nuScenes ego poses emulating GNSS/IMU",
+        "icp_seed": args.icp_seed,
         "frames": len(scans), "motion_pairs": len(pairs), "motion_gaps": [1, 3, 6], "manual_body_noise": se3_vector(noise).tolist(),
         "expected_body_correction": expected.tolist(), "estimated_body_correction": result.x.tolist(),
         "handeye_rmse_se3": float(np.sqrt(np.mean(residual(result.x) ** 2))),
+        "gap_estimates": gap_estimates,
         "icp_rmse_median_m": float(np.median(icp_rmse)), "icp_rmse_per_pair_m": icp_rmse,
         "success": bool(result.success),
     }

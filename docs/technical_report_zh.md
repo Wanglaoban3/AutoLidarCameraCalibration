@@ -126,6 +126,40 @@ docker run --rm --entrypoint python \
 
 生产实现建议用 KISS-ICP、FAST-LIO 或同等级 LiDAR 里程计替换本仓库为可复现而写的简化点到点 ICP；图像侧建议替换通用 Canny 纹理边缘为道路边界、路缘、杆、立面等静态语义边缘。
 
+## 9. 为什么结果会漂移
+
+当前原型的手眼阶段确实恢复的是 `T_B_L`，但它不是一个独立的“真值恢复器”。现有 ICP 使用：
+
+```text
+A_seed = inverse(T_B_L_manual) * B_k * T_B_L_manual
+```
+
+因此人工外参会影响扫描配准的收敛盆地；随后手眼又把 ICP 的 `A_k` 当作观测。ICP 的局部错误就会被手眼优化解释成 LiDAR 外参变化。车辆近似平面运动还会让 z 平移和部分姿态自由度退化。
+
+仓库现在提供两个诊断选项：
+
+```bash
+# 使用人工外参和 IMU 运动作 ICP 初值（当前基线）
+... lidar_icp_handeye.py --icp-seed manual
+
+# ICP 从单位变换开始，显式观察不依赖人工外参时的漂移
+... lidar_icp_handeye.py --icp-seed identity
+```
+
+`report.json` 中的 `gap_estimates` 会分别报告 1、3、6 帧运动基线的手眼结果。如果这些结果在旋转或平移上不一致，不能发布单个全局外参。一次实际诊断中，`manual` seed 的 ICP 中位 RMSE 为 `0.547 m`，`identity` seed 为 `0.800 m`；后者的手眼 RMSE 为 `4.36`，说明这个简化 ICP 对初值敏感。
+
+## 10. 消除初值依赖的下一版
+
+量产实现应把外参、每帧 LiDAR 位姿和传感器时间偏移放进同一个因子图，而不是串联地把 ICP 结果当真值：
+
+1. LiDAR odometry 在 LiDAR 自身坐标系中运行，只使用 IMU 陀螺作为旋转先验，不使用待校正的 `T_B_L` 作为几何约束。
+2. 对每一段运动保存 ICP/scan-matching 协方差和退化指标；平面直行、动态物体过多或重叠不足的运动不进入手眼因子。
+3. 用多个独立时间窗口、留一窗口和 RANSAC/Huber 估计 `T_B_L`，计算窗口间协方差；漂移超过阈值时冻结而不是平均发布。
+4. 将六相机的静态语义边缘、地面法向和杆/立面线加入同一个全局目标，用图像因子打破纯车辆运动下的 yaw/平移歧义。
+5. 对至少两个粗姿态假设并行精修，在留出帧上比较得分；粗匹配不应成为唯一初始化路径。
+
+因此，手眼标定应被视为“粗初始化和运动约束因子”，而不是最终外参。最终发布量必须由 LiDAR、IMU/GNSS、六相机和时间偏移的联合一致性决定。
+
 ## 8. 文件说明
 
 | 文件 | 作用 |
@@ -135,4 +169,3 @@ docker run --rm --entrypoint python \
 | `joint_body_calibration.py` | 六相机共享车体系修正、地面初始化与边缘验证 |
 | `nuscenes_edge_demo.py` | 单帧/多帧 Galibr-style 边缘投影、动态过滤和可视化 |
 | `results/*.json` | 已完成实验的数值输出 |
-

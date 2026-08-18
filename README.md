@@ -26,9 +26,10 @@ docker run --rm --entrypoint python \
   --out /workspace/results/icp_handeye_4deg
 ```
 
+比较 ICP 对人工初值的依赖：把 `--icp-seed manual` 改为 `--icp-seed identity`。报告中的 `gap_estimates` 会分别输出 1、3、6 帧基线的手眼结果；窗口间明显不一致时应冻结校准。
+
 查看 `results/icp_handeye_4deg/report.json` 中的 `expected_body_correction` 与 `estimated_body_correction`。完整方法、单帧输入和限制见 [技术报告](docs/technical_report_zh.md)。
 
 ## Important Limitation
 
 ICP + 平面车辆运动可可靠恢复姿态，但竖直平移通常不可观。该工程是研究原型，不应直接用于车端发布；生产系统还必须接入时钟偏移估计、地图/语义静态物体、长时间激励轨迹、独立验证窗口和速率限制。
-
