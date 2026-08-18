@@ -28,6 +28,21 @@ docker run --rm --entrypoint python \
 
 比较 ICP 对人工初值的依赖：把 `--icp-seed manual` 改为 `--icp-seed identity`。报告中的 `gap_estimates` 会分别输出 1、3、6 帧基线的手眼结果；窗口间明显不一致时应冻结校准。
 
+## Inspect Edge Matches
+
+固定 ICP+手眼粗标结果，生成三联图：图像 Canny/LSD 线段、LiDAR 候选边缘点、以及最终接受的点到线匹配。
+
+```bash
+docker run --rm --entrypoint python \
+  -v "$PWD:/data:ro" -v "$PWD/results:/workspace/results" \
+  auto-lidar-camera-calibration /workspace/edge_match_inspection.py \
+  --dataroot /data --frames 3 \
+  --coarse-json /workspace/results/icp_handeye_diagnostic_manual_4deg.json \
+  --out /workspace/results/edge_match_inspection
+```
+
+每路相机输出 `*_matches.jpg`、`*_image_edges.jpg`、`*_lidar_candidates.jpg`、`*_accepted_matches.jpg` 和 `report.json`。三联图中红点是所有投影 LiDAR 边缘候选，绿点是通过距离/方向门控的匹配，紫线是点到图像线段的残差连接。
+
 查看 `results/icp_handeye_4deg/report.json` 中的 `expected_body_correction` 与 `estimated_body_correction`。完整方法、单帧输入和限制见 [技术报告](docs/technical_report_zh.md)。
 
 ## Important Limitation
