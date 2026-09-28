@@ -239,7 +239,7 @@ def project_samples(frame, p_l, T_lc, sample):
 # ---- depth-edge samples on the stacked cloud --------------------------------
 def depth_edge_samples_dense(frame, R_ec, R_le, cell_px=6.0, jump_thr=0.5,
                              jump_rel=0.06, max_samples=2500, rng=None,
-                             min_sep_px=3.0):
+                             min_sep_px=3.0, near_side=False):
     """Depth-discontinuity samples from the DENSE stacked cloud (~10x the
     key sweep), extracted at the BASE pose (fixed evidence).
 
@@ -250,6 +250,12 @@ def depth_edge_samples_dense(frame, R_ec, R_le, cell_px=6.0, jump_thr=0.5,
     depth_edge_samples for why), with the normal toward the near cell.
     Rasterization needs fill, which only the stacked cloud has; running
     this on a single sparse sweep leaves mostly holes.
+
+    near_side=True returns the NEAR cell's point instead (normals flipped):
+    the foreground object OWNS the photometric silhouette, so for
+    distance-field alignment the near side is the evidence -- far-side
+    points sit on bare road/wall behind the contour, ~17 px median from
+    any strong TEED edge (measured), which makes the DT objective flat.
 
     Returns dict(p_idx into the STACKED cloud, normals [n,2], t_max [n])."""
     uv, z, ok = frame.project_stacked(R_ec, R_le)
@@ -314,9 +320,12 @@ def depth_edge_samples_dense(frame, R_ec, R_le, cell_px=6.0, jump_thr=0.5,
     if len(i_far) == 0:
         return dict(p_idx=np.array([], np.int64), normals=np.zeros((0, 2)),
                     t_max=np.zeros(0))
-    # keep the WIDEST-baseline pair per far point (max reach for the
-    # one-sided band; nearest-strong-ridge still stops at the first ridge)
-    order = np.argsort(-sep)
+    # keep ONE pair per far point. Far side: the WIDEST baseline (max
+    # reach for the one-sided band; nearest-strong-ridge still stops at
+    # the first ridge). Near side: the SHORTEST -- the ring-1 near point
+    # hugs the silhouette, while a ring-3 near point sits a dozen px
+    # inside the object, away from the photometric edge.
+    order = np.argsort(sep if near_side else -sep)
     _, first_occ = np.unique(i_far[order], return_index=True)
     keep = order[first_occ]
     i_far, i_near, sep = i_far[keep], i_near[keep], sep[keep]
@@ -334,7 +343,23 @@ def depth_edge_samples_dense(frame, R_ec, R_le, cell_px=6.0, jump_thr=0.5,
     i_far, i_near, sep = i_far[s_idx], i_near[s_idx], sep[s_idx]
     n2 = uv[i_near] - uv[i_far]
     n2 /= np.maximum(sep[:, None], 1e-9)
-    e_idx, e_nrm, e_tmax = i_far, n2, sep
+    if near_side:
+        i_near, i_far = i_far, i_near
+        n2 = -n2
+        # re-key the per-point selection on the NEAR points: widest
+        # baseline + 16 px decorrelation were deduped against far cells
+        order = np.argsort(-sep)
+        _, first_occ = np.unique(i_near[order], return_index=True)
+        keep = order[first_occ]
+        i_far, i_near, sep, n2 = (i_far[keep], i_near[keep], sep[keep],
+                                  n2[keep])
+        sup = 16
+        key = ((uv[i_near, 1] // sup).astype(np.int64) * 4096
+               + (uv[i_near, 0] // sup).astype(np.int64))
+        _, s_idx = np.unique(key, return_index=True)
+        s_idx.sort()
+        i_near, n2, sep = i_near[s_idx], n2[s_idx], sep[s_idx]
+    e_idx, e_nrm, e_tmax = i_near, n2, sep
     if max_samples and len(e_idx) > max_samples:
         keep = (rng or np.random.default_rng(0)).choice(
             len(e_idx), max_samples, replace=False)
@@ -427,12 +452,24 @@ def build_dt_map(frame, percentile=DT_EDGE_PCT):
 
 
 def marking_points(frame, intensity, max_points=400,
-                   int_pct=MARK_INTENSITY_PCT):
+                   int_pct=MARK_INTENSITY_PCT, front_only=True):
     """Indices (into the stacked cloud) of high-intensity GROUND returns on
     the rim of BEV marking regions, in reference-ego coordinates at the
-    BASE lidar rotation (fixed evidence, like the dynamic mask)."""
+    BASE lidar rotation (fixed evidence, like the dynamic mask).
+
+    front_only: the reference recipe candidates the FULL circle around the
+    vehicle because it refines with 6 surround cameras; with a single
+    front camera, keep only the VISIBLE ground band -- ground closer than
+    ~4 m projects below the vertical FOV (camera ~1.5 m up, ~20 deg down
+    half-angle), and ground farther than 30 m yields no intensity-
+    separable paint anyway (far paint p99 intensity = 27, HDL-32E).
+    Evidence must be selectable WITHOUT the image (physics: paint
+    intensity), otherwise the optimizer has no true pull -- DT proximity
+    filters select points that are near SOME edge at every pose and kill
+    the basin (measured: flat at both GT and coarse)."""
     p_e = frame.stacked_ego_ref()
-    band = ((p_e[:, 0] > -15.0) & (p_e[:, 0] < 70.0)
+    x_min, x_max = (4.0, 30.0) if front_only else (-15.0, 70.0)
+    band = ((p_e[:, 0] > x_min) & (p_e[:, 0] < x_max)
             & (np.abs(p_e[:, 1]) < 25.0)
             & (p_e[:, 2] > -1.5) & (p_e[:, 2] < 0.5))
     if int(band.sum()) < 100:
