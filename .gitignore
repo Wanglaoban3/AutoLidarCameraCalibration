@@ -1,0 +1,13 @@
+# experiment artifacts (regenerable)
+outputs/
+extrinsic_recovery/results/
+extrinsic_recovery/*_out.txt
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# os
+.DS_Store
+Thumbs.db
