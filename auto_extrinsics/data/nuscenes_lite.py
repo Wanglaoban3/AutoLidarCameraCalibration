@@ -60,6 +60,50 @@ class NuScenesLite:
         return {r['token']: r for r in self.table(name)}
 
     # ---- frame listing -----------------------------------------------------
+    CAM_CHANNELS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT',
+                    'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT')
+
+    def frames_of_log_multi(self, log_prefix, channels=CAM_CHANNELS,
+                            lidar='LIDAR_TOP', scene_name=None):
+        """Key-frame records with ALL requested channels + lidar per
+        sample: dict(sample=..., CAM_*=sample_data..., LIDAR_TOP=...).
+        scene_name filters to one scene's clip -- v1.0-mini has 10 scenes
+        but only 8 logs (n015-2018-11-21 alone holds three scenes), so
+        the 10-clip harness enumerates SCENES, not logs."""
+        log_of = {l['token']: l['logfile'] for l in self.table('log')}
+        scene_by_log = {log_of[s['log_token']]: s['token']
+                        for s in self.table('scene')}
+        if log_prefix not in scene_by_log:
+            raise KeyError(f'log {log_prefix!r} not found')
+        scene_token = scene_by_log[log_prefix]
+        samples = self._by_token('sample')
+        sd_of = self._by_token('sample_data')
+        sensor_of = {s['token']: s['channel'] for s in self.table('sensor')}
+        ch_of = {c['token']: sensor_of[c['sensor_token']]
+                 for c in self.table('calibrated_sensor')}
+        want = set(channels) | {lidar}
+        per_sample = {}
+        for sd in sd_of.values():
+            if not sd['is_key_frame']:
+                continue
+            ch = ch_of[sd['calibrated_sensor_token']]
+            if ch in want:
+                per_sample.setdefault(sd['sample_token'], {})[ch] = sd
+        out = []
+        scenes = self._by_token('scene')
+        for tok, recs in per_sample.items():
+            samp = samples[tok]
+            if samp['scene_token'] != scene_token:
+                continue
+            if scene_name is not None \
+                    and scenes[samp['scene_token']]['name'] != scene_name:
+                continue
+            if lidar in recs and all(c in recs for c in channels):
+                recs['sample'] = samp
+                out.append(recs)
+        out.sort(key=lambda r: r['sample']['timestamp'])
+        return out
+
     def frames_of_log(self, log_prefix, channel_a='CAM_FRONT',
                       channel_b='LIDAR_TOP'):
         """Key-frame pairs (one per nuScenes sample) for one log, sorted by

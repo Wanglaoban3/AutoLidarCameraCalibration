@@ -468,9 +468,17 @@ def marking_points(frame, intensity, max_points=400,
     filters select points that are near SOME edge at every pose and kill
     the basin (measured: flat at both GT and coarse)."""
     p_e = frame.stacked_ego_ref()
-    x_min, x_max = (4.0, 30.0) if front_only else (-15.0, 70.0)
+    if front_only:
+        x_min, x_max = 4.0, 30.0
+        y_abs = 25.0
+    else:
+        # full circle around the vehicle (the reference recipe candidates
+        # the full disk because its refinement uses 6 surround cameras;
+        # each camera then projects the subset it can see)
+        x_min, x_max = -60.0, 70.0
+        y_abs = 40.0
     band = ((p_e[:, 0] > x_min) & (p_e[:, 0] < x_max)
-            & (np.abs(p_e[:, 1]) < 25.0)
+            & (np.abs(p_e[:, 1]) < y_abs)
             & (p_e[:, 2] > -1.5) & (p_e[:, 2] < 0.5))
     if int(band.sum()) < 100:
         return np.array([], np.int64)
@@ -486,15 +494,16 @@ def marking_points(frame, intensity, max_points=400,
     cutoff = float(np.percentile(intensity[ground], int_pct))
     high = ground & (intensity >= cutoff)
 
-    x0, y0 = -5.0, -40.0
+    x0, y0 = (-60.0, -40.0) if not front_only else (-5.0, -40.0)
+    x_w = 130.0 if not front_only else 75.0
     res = MARK_BEV_RES
     gx = ((p_e[:, 0] - x0) / res).astype(np.int32)
     gy = ((p_e[:, 1] - y0) / res).astype(np.int32)
-    in_grid = high & (gx >= 0) & (gx < int(75.0 / res)) \
+    in_grid = high & (gx >= 0) & (gx < int(x_w / res)) \
         & (gy >= 0) & (gy < int(80.0 / res))
     if not in_grid.any():
         return np.array([], np.int64)
-    occ = np.zeros((int(80.0 / res), int(75.0 / res)), np.uint8)
+    occ = np.zeros((int(80.0 / res), int(x_w / res)), np.uint8)
     occ[gy[in_grid], gx[in_grid]] = 255
     # join the repeated returns of one painted region, keep sizable regions,
     # then keep only their rim cells (boundary = where the photometric
