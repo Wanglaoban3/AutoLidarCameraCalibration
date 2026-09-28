@@ -158,6 +158,10 @@ def main():
                          'the harness enumerates scenes)')
     ap.add_argument('--mode', default='fresh',
                     choices=['fresh', 'gt', 'real_coarse'])
+    ap.add_argument('--which', default='all', choices=['all', 'cams'],
+                    help='fresh drift injection scope: all = 6 cams + '
+                         'lidar (user-corrected model); cams = lidar stays '
+                         'FACTORY-correct, only the cameras drifted')
     ap.add_argument('--probe', action='store_true',
                     help='per-camera per-DoF pooled-cost sweep, no opt')
     ap.add_argument('--seed', type=int, default=101)
@@ -197,14 +201,23 @@ def main():
         print('init: legacy real_coarse (front+lidar npy; others factory)')
     elif args.mode == 'fresh':
         rng = np.random.default_rng(args.seed)
-        R_le0 = nz.sample_mounting_noise(rng, args.mag, with_yaw=True) \
-            @ R_le0
-        for kf in kfs:
-            for ch, fg in kf['cams'].items():
-                fg.R_ec0 = nz.sample_mounting_noise(
-                    rng, args.mag, with_yaw=True) @ fg.R_ec0
-        print(f'init: fresh drift on 6 cams + lidar (mag {args.mag}, '
-              f'seed {args.seed})')
+        if args.which == 'cams':
+            # lidar stays FACTORY-correct; only the cameras drifted
+            for kf in kfs:
+                for ch, fg in kf['cams'].items():
+                    fg.R_ec0 = nz.sample_mounting_noise(
+                        rng, args.mag, with_yaw=True) @ fg.R_ec0
+            print(f'init: fresh drift on 6 cams only, lidar CORRECT '
+                  f'(mag {args.mag}, seed {args.seed})')
+        else:
+            R_le0 = nz.sample_mounting_noise(rng, args.mag, with_yaw=True) \
+                @ R_le0
+            for kf in kfs:
+                for ch, fg in kf['cams'].items():
+                    fg.R_ec0 = nz.sample_mounting_noise(
+                        rng, args.mag, with_yaw=True) @ fg.R_ec0
+            print(f'init: fresh drift on 6 cams + lidar (mag {args.mag}, '
+                  f'seed {args.seed})')
     else:
         print('init: GT (zero-noise stability check)')
 
@@ -234,7 +247,7 @@ def main():
     # ---- bounded least_squares over the 18 camera deltas -------------------
     from scipy.optimize import least_squares
     train = [kf for i, kf in enumerate(kfs) if i % 2 == 0]
-    step18 = np.full(18, 1.0)
+    step18 = np.full(18, 1.5)   # the reference recipe's own +-1.5 deg box
     lo, up = -step18, step18
 
     def cost(x_deg):
