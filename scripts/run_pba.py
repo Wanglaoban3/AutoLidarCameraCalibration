@@ -104,10 +104,14 @@ def membership(tracks, cloud, tree, planes, band, T_ge_ref, debug=False):
     return U_own, pk, w, plan, n_plan, n_cons, per
 
 
-def solve_round(pb, plan, band, x_in, rng_gate, tag, sel_pre=None):
+def solve_round(pb, plan, band, x_in, rng_gate, tag, sel_pre=None,
+                to_full=None):
     """One frozen-association round: holdout-gated bounded Huber solve.
-    Returns (x, info)."""
-    con = (plan > 0)
+    to_full maps the solve-space x to the 6-dim apply_deltas state
+    (FixedLidarPBA solves 3-dim with the lidar rotvec pinned). Returns
+    (x, info) in SOLVE space."""
+    con = (plan > 0) if plan is not None else None   # noqa: F841 (unused
+    # legacy hook: association is already band-filtered upstream)
     if sel_pre is not None:
         con &= sel_pre
     if band is not None:
@@ -121,7 +125,8 @@ def solve_round(pb, plan, band, x_in, rng_gate, tag, sel_pre=None):
     t0 = time.time()
     res = pb.solve(x_in, train_sel)
     x_t = res.x
-    R_le_t, R_ec_t = apply_deltas(pb.R_le0, pb.R_ec0, x_t)
+    x_f = to_full(x_t) if to_full is not None else x_t
+    R_le_t, R_ec_t = apply_deltas(pb.R_le0, pb.R_ec0, x_f)
     report(f'{tag} trial', R_le_t, R_ec_t, GT['R_le'], GT['R_ec'])
     med1, p901, n1 = pb.gate(x_t, gate_sel)
     boundary = bool(np.any(np.isclose(x_t, -np.radians(pba.BOX_DEG),
@@ -144,8 +149,8 @@ def solve_round(pb, plan, band, x_in, rng_gate, tag, sel_pre=None):
                 n_holdout=int(len(gate_sel)),
                 med0=med0, med1=med1, p900=p900, p901=p901,
                 publish=publish, boundary=boundary,
-                x_le_deg=np.degrees(x_t[:3]).tolist(),
-                x_ec_deg=np.degrees(x_t[3:]).tolist(),
+                x_le_deg=np.degrees(x_f[:3]).tolist(),
+                x_ec_deg=np.degrees(x_f[3:]).tolist(),
                 sec=round(time.time() - t0, 1))
     return (x_t if publish else x_in), info
 
@@ -270,7 +275,7 @@ def main():
         return
 
     pb = pba.PBAResidual(
-        U, pk, w, planes, fg_ref.stack_G[-1], fg_ref.t_le, fg_ref.t_ec,
+        U, pk, w, planes, fg_ref.T_ge_c, fg_ref.t_le, fg_ref.t_ec,
         [t['T_ge'] for t in tracks], R_le0, R_ec0)
 
     if args.mode == 'probe':

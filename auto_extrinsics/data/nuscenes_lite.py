@@ -189,6 +189,29 @@ class NuScenesLite:
         pts = np.fromfile(p, dtype=np.float32).reshape(-1, 5)
         return pts[:, :4 if with_intensity else 3].astype(np.float64)
 
+    def camera_window(self, cam_sd, before=6, after=6):
+        """CAM_* sample_data chain around cam_sd INCLUDING non-key
+        intermediate frames (cameras run at ~12 Hz, keyframes at 2 Hz),
+        chronological order, cam_sd included. Each record carries its OWN
+        ego_pose (GT trajectory at frame rate) and calibrated_sensor
+        token, so every intermediate frame gets a full pose/calib chain
+        without touching any annotation."""
+        sd_of = self._by_token('sample_data')
+        cs = cam_sd['calibrated_sensor_token']
+
+        def walk(tok, direction, limit):
+            out = []
+            while tok and len(out) < limit:
+                sd = sd_of[tok]
+                if sd['calibrated_sensor_token'] == cs:
+                    out.append(sd)
+                tok = sd[direction]
+            return out
+
+        older = walk(cam_sd['prev'], 'prev', before)
+        newer = walk(cam_sd['next'], 'next', after)
+        return older[::-1] + [cam_sd] + newer
+
     def sweep_history(self, lidar_sd, n=10):
         """n most recent LIDAR_TOP sweeps ending at lidar_sd (inclusive),
         chronological order. Sweeps are 50 ms apart and each carries its OWN
