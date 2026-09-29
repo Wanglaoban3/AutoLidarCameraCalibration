@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir numpy scipy opencv-python-headless PyYAML nuscenes-devkit==1.2.0
+WORKDIR /workspace
+COPY mfcalib_python.py mfcalib_nuscenes.py mfcalib_config.example.yaml /workspace/
+ENTRYPOINT ["python", "/workspace/mfcalib_python.py"]
